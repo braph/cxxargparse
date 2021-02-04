@@ -57,7 +57,7 @@
  * - Detection of duplicate options, *at least in debug (#ifndef NDEBUG)*
  *
  * - Although it seems a bit hacky I really would like to use embedded \0 for long/short options:
- *   --foo -f would become Option("foo\0f",...) 
+ *   --foo -f would become Option("foo\0f",...)
  *
  * - Testing the parser!!! (Maybe write test cases)
  *   Following cases should be covered...
@@ -255,85 +255,118 @@ make_provider(Iterator beg, Iterator end) { return OptionProvider<Iterator>{beg,
 // Parsing function
 // ============================================================================
 
-static void default_unknown_argument_handler(const char* s, size_t n) {
-  throw Exception("Option not found");
-}
-
-template<
-  class OptionProvider,
-  class ArgumentIterator,
-  class ArgumentHandler,
-  class UnknownArgumentHandler
->
-int parse_args(
-  ArgumentIterator arguments_beg,
-  ArgumentIterator arguments_end,
-  const OptionProvider& options,
-  ArgumentHandler&& argument_handler,
-  UnknownArgumentHandler&& unknown_argument_handler
-) {
-  enum {
+struct Argument {
+  enum argument_type {
     NO_DASH     = 0,
     SINGLE_DASH = 1,
     DOUBLE_DASH = 2,
-    OPTIONS_END = 3
+    OPTIONS_END = 3,
+    END         = 4
   };
 
-  for (;arguments_beg != arguments_end; ++arguments_beg) {
-    const char* arg = *arguments_beg;
-    const int dash_count = (arg[0]=='-'?(arg[1]=='-'?(!arg[2]?3:2):1):0);
-    arg += dash_count;
+  const char* s;
+  size_t len;
+  argument_type type;
 
-    if (dash_count == SINGLE_DASH) {
-      for (;*arg; ++arg) {
-        const Option* opt = options.find_short(*arg);
-        if (! opt)
-          unknown_argument_handler(arg, 1);
-        else if (! opt->has_arg())
-          opt->call(0);
-        else if (arg[1]) {
-          opt->call(arg + 1);
-          break;
-        }
-        else if (++arguments_beg != arguments_end) {
-          opt->call(*arguments_beg);
-          break;
-        }
-        else throw Exception("missing arg");
-      }
-    }
-    else if (dash_count == DOUBLE_DASH) {
-      size_t arg_len;
-      for (arg_len = 0; arg[arg_len] && arg[arg_len] != '='; ++arg_len);
+  constexpr Argument()
+  : s(0)
+  , len(0)
+  , type(END)
+  {}
+};
 
-      const Option* opt = options.find_long(arg, arg_len);
-      if (! opt)
-        unknown_argument_handler(arg, arg_len);
-      else if (! opt->has_arg()) {
-        if (arg[arg_len])
-          throw Exception("trailing....");
-        opt->call(0);
-      }
-      else if (arg[arg_len]) {
-        opt->call(arg);
-      }
-      else if (++arguments_beg != arguments_end)
-        opt->call(*arguments_beg);
-      else
-        throw Exception("missing argument");
+template<class Iterator>
+struct Parser {
+  Parser(Iterator begin, Iterator end)
+  : _args_beg(begin)
+  , _args_end(end)
+  , _cur_arg()
+  , _in_single_arg(false)
+  {}
+
+  Iterator _args_beg;
+  Iterator _args_end;
+  Argument _cur_arg;
+  bool     _in_single_arg; // Retrieve next argument from current string
+
+  const Argument& current_argument() const noexcept { return _cur_arg;  }
+  Iterator begin()                   const noexcept { return _args_beg; }
+  Iterator end()                     const noexcept { return _args_end; }
+
+  const Argument& next() noexcept {
+    if (_in_single_arg && _cur_arg.s[1]) {
+      _cur_arg.s++;
+      return _cur_arg;
     }
-    else if (dash_count == OPTIONS_END) {
-      ++arguments_beg;
-      break;
+
+    if (_args_beg == _args_end) {
+      _cur_arg.type = Argument::END;
+      return _cur_arg;
     }
-    else
-      argument_handler(arg);
+
+    _cur_arg.type = _get_type(*_args_beg);
+    _cur_arg.s    = *_args_beg + _cur_arg.type;
+    ++_args_beg;
+
+    if (_cur_arg.type == Argument::SINGLE_DASH) {
+      _cur_arg.len = 1;
+      _in_single_arg = true;
+    }
+    else if (_cur_arg.type == Argument::DOUBLE_DASH)
+      for (
+        _cur_arg.len = 1;
+        _cur_arg.s[_cur_arg.len] && _cur_arg.s[_cur_arg.len] != '=';
+        _cur_arg.len++
+      );
+
+    return _cur_arg;
   }
 
-  for (;arguments_beg != arguments_end; ++arguments_beg)
-    argument_handler(*arguments_beg);
+  /// Read ["-o", "arg"] or ["-oarg"]
+  const char* read_short_argument() noexcept {
+    _in_single_arg = false;
 
-  return 0;
+    if (_cur_arg.s[1]) {
+      return _cur_arg.s + 1;
+    }
+    else if (_args_beg != _args_end) {
+      const auto& r = *_args_beg;
+      ++_args_beg;
+      return r;
+    }
+    else
+      return NULL;
+  }
+
+  /// Read ["--option", "arg"] or ["--option=arg"]
+  const char* read_long_argument() noexcept {
+    if (_cur_arg.s[_cur_arg.len] == '=')
+      return &_cur_arg.s[_cur_arg.len + 1];
+    else if (_args_beg != _args_end) {
+      const auto& r = *_args_beg;
+      ++_args_beg;
+      return r;
+    }
+    else
+      return NULL;
+  }
+
+private:
+  static inline Argument::argument_type _get_type(const char* s) {
+    return (s[0] != '-' ? Argument::NO_DASH :
+           (s[1] != '-' ? Argument::SINGLE_DASH :
+           (s[2]        ? Argument::DOUBLE_DASH :
+                          Argument::OPTIONS_END)));
+  }
+};
+
+template<class Iterator>
+struct Parser<Iterator>
+make_parser(Iterator beg, Iterator end) { return Parser<Iterator>{beg, end}; }
+
+
+static void default_unknown_argument_handler(const char* s, size_t n) {
+  throw Exception("Option not found");
 }
 
 template<class OptionProvider, class ArgumentIterator, class ArgumentHandler>
@@ -343,7 +376,58 @@ int parse_args(
   OptionProvider&&   options,
   ArgumentHandler&&  argument_handler
 ) {
-  return parse_args(arguments_beg, arguments_end, options, argument_handler, default_unknown_argument_handler);
+  Option* option;
+  auto p = make_parser(arguments_beg, arguments_end);
+
+  do {
+    const auto& arg = p.next();
+    switch (arg.type) {
+    case Argument::NO_DASH:
+      argument_handler(arg.s);
+      break;
+
+    case Argument::SINGLE_DASH:
+      if (! (option = options.find_short(*arg.s)))
+        throw Exception("Invalid short option");
+      if (! option->has_arg())
+        option->call(0);
+      else {
+        const char* arg = p.read_short_argument();
+        if (! arg)
+          throw Exception("Missing short option argument");
+        option->call(arg);
+      }
+      break;
+
+    case Argument::DOUBLE_DASH:
+      if (! (option = options.find_long(arg.s, arg.len)))
+        throw Exception("Invalid long option");
+      if (! option->has_arg())
+        option->call(0);
+      else {
+        const char* arg = p.read_long_argument();
+        if (! arg)
+          throw Exception("Missing long option argument");
+        option->call(arg);
+      }
+      break;
+
+    case Argument::OPTIONS_END:
+      break;
+
+    case Argument::END:
+      return 0;
+    }
+  } while(1);
+
+  for (;;) {
+    const auto& arg = p.next();
+    if (arg.type == Argument::END)
+      break;
+    argument_handler(arg.s);
+  }
+
+  return 0;
 }
 
 } // namespace
