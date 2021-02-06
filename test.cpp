@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cassert>
 #include <iostream>
+#include <initializer_list>
 
 /* TODO:
  * - exceptionless usage
@@ -13,19 +14,13 @@
  *   - or by using fallback errhandlers that do `printf(); exit(1)`
  *
  * - add descriptions (aka "help" in python)?
- * - add required flag
- *     -> by checking if option_state.count() > 0
  *
  * - zomg, maybe even --pair a b -> map[a]=b? crazy?
  *
  * - Implement following python-like actions
  *   - store with specialization for the following types:
- *     char<>[u]int8_t
- *     unsigned char - ?
- *     signed char - ??????????????
  *     wchar_t*    << use mbstowc/ws
  *     std::filesystem::path << maybe?
- *   - maybe store_string that works with *arbirtary* string types (also QString)
  *   - append_const -> push_back_const, insert_const ????
  *   - extend
  *   - choices (aaaargh, fuck it?)
@@ -37,7 +32,12 @@
  * - Add mutually exclusive groups?
  *   -> by using option_state
  *
- * - add parse_intermixed_args()? (fuck my life)
+ * - Oh my gosh:
+ *   parse_intermixed_args(), parse_known_args(), parse_known_intermixed_args()
+ *
+ * - Option prefix (-+/...)
+ *
+ * - Allow abbrev
  *
  * - Hm... python lets us use subparsers/subcommands (like git, you know?)
  *   We also want to provide this feature (without bloating up our parser, ofc!)
@@ -55,17 +55,46 @@
  *
  * - An option should be able to have multiple short/long names
  *   - char[8] for maximum 8 short names?
- *   - how to encoded if it's a positional or named option?
+ *   - how to encode if it's a positional or named option?
  *   - shall we use embedded \0 to avoid copies?
- *
- * - Testing the parser!!! (Maybe write test cases)
- *   Following cases should be covered...
- *     --arg X, --arg=X
- *     --flag, -f, -blfa
  */
+
+#define test(...) assert(test(__VA_ARGS__))
+bool (test)(const std::initializer_list<const char*>& args, int expect_f, int expect_a)
+try {
+  int flag = 0, arg = 0;
+
+  using namespace CommandLine;
+  Option options[] = {
+    {"flag", 'f',  0, store_true(flag)},
+    {"arg",  'a',  1, store(arg)},
+  };
+
+  options_state state;
+  parse_args(
+    std::begin(args), std::end(args),
+    make_provider(std::begin(options), std::end(options)),
+    state
+  );
+
+  return flag == expect_f && arg == expect_a;
+} catch (const std::exception& e) {
+  std::puts(e.what());
+  return 0;
+}
 
 int main(int argc, const char**argv)
 try {
+  test({},               0, 0);
+  test({"-f"},           1, 0);
+  test({"--flag"},       1, 0);
+  test({"-a", "1"},      0, 1);
+  test({"-a1",},         0, 1);
+  test({"--arg=1"},      0, 1);
+  test({"--arg", "1"},   0, 1);
+  test({"-fa", "1"},     1, 1);
+  test({"-fa1"},         1, 1);
+
   using std::cout;
   using namespace CommandLine;
 
@@ -117,6 +146,8 @@ try {
     {"vec_str",       0,  1,  push_back(_vec_str)},
     {"set_str",       0,  1,  insert(_set_str)},
 
+  //{"required",      0,  1|Option::required, store(infile)},
+
     {"INFILE",        1,  1,  store(infile)},
     {"OUTFILE",       1,  1,  store(outfile)},
   };
@@ -127,6 +158,11 @@ try {
     make_provider(std::begin(options), std::end(options)),
     state
   );
+
+  for (const auto& opt : options) {
+    if (opt.is_required() && ! state.find(&opt).count)
+      throw Exception("Required option missing");
+  }
 
 #if 0
   for (auto& opt : state)

@@ -5,6 +5,7 @@
 #include <cstdlib>    // std::strtoull
 #include <limits>     // std::numeric_limits
 #include <vector>     // std::vector
+#include <climits>    // INT_MAX
 #include <cinttypes>
 #include <cassert>//TODO
 #include <cstdio>//TODO
@@ -24,8 +25,12 @@ using Exception = std::invalid_argument;
 // ============================================================================
 
 struct Option {
-
   using callback_t = std::function<void(const char*)>;
+
+  enum : int {
+    required = INT_MAX << 1,
+    drop_flags = ~(required)
+  };
 
   /*constexpr*/ Option
   (
@@ -40,12 +45,13 @@ struct Option {
   , _callback(std::forward<callback_t>(callback))
   {}
 
-  inline bool        is_positional()     const noexcept { return _short_option == 1; }
-  inline char        short_option()      const noexcept { return _short_option;      }
-  inline const char* long_option()       const noexcept { return _long_option;       }
-  inline bool        has_arg()           const noexcept { return _num_args;          }
-  inline int         num_args()          const noexcept { return _num_args;          }
-  inline void        call(const char* s) const          { return _callback(s);       }
+  inline bool        is_positional()     const noexcept { return _short_option == 1;     }
+  inline char        short_option()      const noexcept { return _short_option;          }
+  inline const char* long_option()       const noexcept { return _long_option;           }
+  inline bool        has_arg()           const noexcept { return _num_args & drop_flags; }
+  inline int         num_args()          const noexcept { return _num_args & drop_flags; }
+  inline void        call(const char* s) const          { return _callback(s);           }
+  inline bool        is_required()       const noexcept { return _num_args & required;   }
 
 private:
   const char* _long_option;
@@ -221,9 +227,13 @@ make_parser(Iterator beg, Iterator end) { return Parser<Iterator>{beg, end}; }
 
 struct options_state {
   struct option_state {
-    Option* option;
+    const Option* option;
     int count;
   };
+
+  options_state()
+  : _not_found{NULL, 0}
+  {}
 
   option_state _not_found;
   std::vector<option_state> _option_states;
@@ -238,6 +248,14 @@ struct options_state {
       }
 
     _option_states.push_back({option, 1});
+  }
+
+  const option_state& find(const Option* option) {
+    for (auto& state : _option_states)
+      if (state.option == option)
+        return state;
+    _not_found.option = option;
+    return _not_found;
   }
 
   iterator begin() noexcept { return _option_states.begin(); }

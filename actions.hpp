@@ -38,6 +38,12 @@ struct store { /* generic store */
   void operator()(const char* s) const { _var = s; }
 };
 
+template<>
+struct store<char> {
+  char& _var;
+  void operator()(const char* s) const { _var = *s; }
+};
+
 // Macros because taking address of fuctions in std:: is UB
 #define make_parse_func(T, CALLBACK, NEED_NARROWING_CHECK)                    \
 template<> inline T parse<T>(const char* s) {                                 \
