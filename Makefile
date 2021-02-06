@@ -2,4 +2,4 @@ test: build
 	./a.out
 
 build:
-	g++ argparse.cpp
+	g++ -g test.cpp
